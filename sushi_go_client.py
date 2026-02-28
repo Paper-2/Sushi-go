@@ -197,14 +197,16 @@ class SushiGoClient:
                 cards.append(match.group(2).strip())
             if self.state:
                 self.state.hand = cards
-                # Update chopsticks/wasabi tracking based on played cards
+                # Update chopsticks tracking based on played cards
                 self.state.has_chopsticks = "Chopsticks" in self.state.played_cards
-                self.state.has_unused_wasabi = any(
-                    c == "Wasabi" for c in self.state.played_cards
-                ) and not any(
-                    c in ("Egg Nigiri", "Salmon Nigiri", "Squid Nigiri")
-                    for c in self.state.played_cards
+                # Wasabi tracking: each nigiri uses one wasabi (if available)
+                # Unused wasabi = wasabi_count - nigiri_count (if positive)
+                wasabi_count = self.state.played_cards.count("Wasabi")
+                nigiri_count = sum(
+                    1 for c in self.state.played_cards
+                    if c in ("Egg Nigiri", "Salmon Nigiri", "Squid Nigiri")
                 )
+                self.state.has_unused_wasabi = wasabi_count > nigiri_count
 
     def parse_played(self, message: str):
         """Parse a PLAYED message to track other players' cards.
@@ -359,6 +361,8 @@ class SushiGoClient:
                     if self.state:
                         self.state.played_cards.append(first_card)
                         self.state.played_cards.append(second_card)
+                        if "Chopsticks" in self.state.played_cards:
+                            self.state.played_cards.remove("Chopsticks")
                         self.state.has_chopsticks = False  # Used our chopsticks
                     return  # Only return if chopsticks succeeded
 
@@ -411,10 +415,9 @@ class SushiGoClient:
         hand_size = len(hand)
         current_round = self.state.round
         turn = self.state.turn
-        
+
         # === WASABI === (PPC 4.5 with squid, 3 with salmon)
         # ALWAYS first pick - best value in game when paired with squid (9 pts)
-        # Early turns: very high value. After turn 3: drops quickly (might only catch egg)
         if not self.state.has_unused_wasabi:
             if turn <= 2:
                 self.cards_weights["Wasabi"] = 8  # Excellent chance to hit squid/salmon
@@ -424,7 +427,7 @@ class SushiGoClient:
                 self.cards_weights["Wasabi"] = 2  # Likely to only hit egg or nothing
         else:
             self.cards_weights["Wasabi"] = 0.5  # Already have one, don't stack
-        
+
         # === NIGIRI === (Egg=1, Salmon=2, Squid=3; with wasabi: 3/6/9)
         wasabi_mult = 3 if self.state.has_unused_wasabi else 1
         self.cards_weights["Egg Nigiri"] = 1 * wasabi_mult
@@ -442,7 +445,7 @@ class SushiGoClient:
                 self.cards_weights["Chopsticks"] = 0.5  # Too late, won't get value
         else:
             self.cards_weights["Chopsticks"] = 0  # Already have one
-        
+
         # === TEMPURA === (PPC 2.5)
         # Decent consistency, easier to complete than sashimi
         tempura_count = played.count("Tempura")
@@ -450,7 +453,7 @@ class SushiGoClient:
             self.cards_weights["Tempura"] = 5  # Complete the pair!
         else:
             self.cards_weights["Tempura"] = 2.5  # Starting fresh
-        
+
         # === SASHIMI === (PPC 3.33 but IT'S A TRAP!)
         # Only ~13% chance (14/108) per card. Easy to block, often doesn't exist in pool.
         sashimi_count = played.count("Sashimi")
@@ -463,22 +466,26 @@ class SushiGoClient:
 
         # Dumplings: 1, 3, 6, 10, 15 points for 1-5+ dumplings
         dumpling_count = played.count("Dumpling")
-    
+
         # === MAKI === (PPC 6 at best)
-        my_maki = (played.count("Maki Roll (1)") * 1 + 
-                   played.count("Maki Roll (2)") * 2 + 
-                   played.count("Maki Roll (3)") * 3)
-        
+        my_maki = (
+            played.count("Maki Roll (1)") * 1
+            + played.count("Maki Roll (2)") * 2
+            + played.count("Maki Roll (3)") * 3
+        )
+
         # Get max opponent maki
         max_opponent_maki = 0
         for player, cards in self.other_players_played.items():
-            opponent_maki = (cards.get("Maki Roll (1)", 0) * 1 +
-                           cards.get("Maki Roll (2)", 0) * 2 +
-                           cards.get("Maki Roll (3)", 0) * 3)
+            opponent_maki = (
+                cards.get("Maki Roll (1)", 0) * 1
+                + cards.get("Maki Roll (2)", 0) * 2
+                + cards.get("Maki Roll (3)", 0) * 3
+            )
             max_opponent_maki = max(max_opponent_maki, opponent_maki)
-        
+
         if my_maki > max_opponent_maki + 3:
-            # leading by a lot 
+            # leading by a lot
             self.cards_weights["Maki Roll (1)"] = 0.5
             self.cards_weights["Maki Roll (2)"] = 1
             self.cards_weights["Maki Roll (3)"] = 1.5
@@ -488,26 +495,25 @@ class SushiGoClient:
             self.cards_weights["Maki Roll (2)"] = 3
             self.cards_weights["Maki Roll (3)"] = 4.5
 
-
         # === PUDDING === (PPC 6 at best)
         my_pudding = self.state.puddings + played.count("Pudding")
-        
+
         # Get opponent pudding counts
-        min_opponent_pudding = float('inf')
+        min_opponent_pudding = float("inf")
         max_opponent_pudding = 0
         for player, cards in self.other_players_played.items():
             p_count = cards.get("Pudding", 0)
             min_opponent_pudding = min(min_opponent_pudding, p_count)
             max_opponent_pudding = max(max_opponent_pudding, p_count)
-        
-        if min_opponent_pudding == float('inf'):
+
+        if min_opponent_pudding == float("inf"):
             min_opponent_pudding = 0
-        
+
         if current_round == 1:
             # Round 1: low priority, let it float
             self.cards_weights["Pudding"] = 1
         elif current_round == 2:
-            
+
             if my_pudding <= min_opponent_pudding:
                 self.cards_weights["Pudding"] = 3  # Risk of last place
             elif my_pudding >= max_opponent_pudding:
@@ -517,14 +523,17 @@ class SushiGoClient:
         else:  # Round 3
             # Round 3: high priority to avoid last or secure first
             if my_pudding < min_opponent_pudding:
-                self.cards_weights["Pudding"] = 6  
-            elif my_pudding == min_opponent_pudding and min_opponent_pudding < max_opponent_pudding:
-                self.cards_weights["Pudding"] = 5  
+                self.cards_weights["Pudding"] = 6
+            elif (
+                my_pudding == min_opponent_pudding
+                and min_opponent_pudding < max_opponent_pudding
+            ):
+                self.cards_weights["Pudding"] = 5
             elif my_pudding >= max_opponent_pudding:
-                self.cards_weights["Pudding"] = 2  
+                self.cards_weights["Pudding"] = 2
             else:
                 self.cards_weights["Pudding"] = 3
-        
+
         # === USE CHOPSTICKS ===
         self.cards_weights["Use chopsticks"] = 0
         if self.state.has_chopsticks and len(hand) >= 2:
@@ -540,9 +549,6 @@ class SushiGoClient:
                 # (top 2 combined > best single + 2 for opportunity cost)
                 if top_two_value > best_single + 2:
                     self.cards_weights["Use chopsticks"] = top_two_value
-
-
-
 
 
 def main():
