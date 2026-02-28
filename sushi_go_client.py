@@ -313,6 +313,8 @@ class SushiGoClient:
             return
         self.calculate_weights()
 
+
+        """
         # Check if we should use chopsticks
         use_chopsticks_value = self.cards_weights.get("Use chopsticks", 0)
         if use_chopsticks_value > 0 and self.state.has_chopsticks and len(self.state.hand) >= 2:
@@ -332,7 +334,7 @@ class SushiGoClient:
                         self.state.played_cards.append(second_card)
                         self.state.has_chopsticks = False  # Used our chopsticks
                 return
-            
+            """
         card_index = self.choose_card(self.state.hand)
 
         # Track the card we're about to play
