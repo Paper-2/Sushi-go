@@ -12,6 +12,7 @@ Example:
     python sushi_go_client.py localhost 7878 abc123 MyBot
 """
 
+import json
 import random
 import re
 import socket
@@ -35,7 +36,8 @@ CARD_NAMES = {
     "Chopsticks": "Chopsticks",
 }
 
-
+strategies = {"nigiri", "maki", "tempura", "sashimi", "dumpling", "pudding"}
+implemented = {"nigiri"}
 @dataclass
 class GameState:
     """Tracks the current state of the game."""
@@ -45,6 +47,7 @@ class GameState:
     hand: list[str]
     round: int = 1
     turn: int = 1
+    score: int = 0
     played_cards: list[str] = None # type: ignore
     has_chopsticks: bool = False
     has_unused_wasabi: bool = False
@@ -64,6 +67,32 @@ class SushiGoClient:
         self.sock: Optional[socket.socket] = None
         self.state: Optional[GameState] = None
         self._recv_buffer = ""
+        self.mode = list(strategies.intersection(implemented))[0]
+        # Track what cards each player has played so far (by player name)
+        self.other_players_played: dict[str, list[str]] = {}
+
+
+        self.cards_weights = {
+            "Tempura": 0,
+            "Sashimi": 0,
+            "Dumpling": 0,
+            "Maki Roll (1)": 0,
+            "Maki Roll (2)": 0,
+            "Maki Roll (3)": 0,
+            "Egg Nigiri": 0,
+            "Salmon Nigiri": 0,
+            "Squid Nigiri": 0,
+            "Pudding": 0,
+            "Wasabi": 0,
+            "Chopsticks": 0,
+        }
+
+        self.other_players_scores: dict[str, int] = {}
+
+    def __post_init__(self):
+        if self.played_cards is None:
+            self.played_cards = []
+
 
     def connect(self):
         """Connect to the server."""
@@ -97,6 +126,7 @@ class SushiGoClient:
             if not chunk:
                 raise ConnectionError("Server closed connection")
             self._recv_buffer += chunk.decode("utf-8", errors="replace")
+
 
     def receive_until(self, predicate) -> str:
         """Read lines until one matches predicate."""
@@ -156,14 +186,83 @@ class SushiGoClient:
                     for c in self.state.played_cards
                 )
 
+    def parse_played(self, message: str):
+        """Parse a PLAYED message to track other players' cards.
+        
+        Format: PLAYED Alice:Salmon Nigiri; Bob:Tempura; Carol:Maki Roll (2)
+        """
+        if message.startswith("PLAYED"):
+            payload = message[len("PLAYED "):]
+            # Split by semicolon to get each player's card
+            for player_card in payload.split(";"):
+                player_card = player_card.strip()
+                if ":" in player_card:
+                    player_name, card = player_card.split(":", 1)
+                    player_name = player_name.strip()
+                    card = card.strip()
+                    
+                    # Initialize player's list if not exists
+                    if player_name not in self.other_players_played:
+                        self.other_players_played[player_name] = []
+                    
+                    # Track the card they played
+                    self.other_players_played[player_name].append(card)
+
+    def parse_round_end(self, message: str):
+        """Parse a ROUND_END message to track player scores.
+        
+        Format: ROUND_END 1 {"Alice":12,"Bob":8,"Carol":15}
+        """
+        if message.startswith("ROUND_END"):
+            try:
+                # Extract JSON part after the round number
+                parts = message.split(maxsplit=2)
+                if len(parts) >= 3:
+                    scores_json = parts[2]
+                    scores = json.loads(scores_json)
+                    
+                    # Update other players' scores
+                    for player_name, score in scores.items():
+                        self.other_players_scores[player_name] = score
+                    
+                    # Update current player's score if available
+                    if self.state and self.state.game_id:
+                        # Try to find our score by checking if our player_id matches
+                        # For now, we'll assume the first score is ours if we have a state
+                        for player_name, score in scores.items():
+                            # Update our score based on game state
+                            self.other_players_scores[player_name] = score
+            except (json.JSONDecodeError, ValueError, IndexError):
+                pass  # Silently ignore parsing errors
+
     def choose_card(self, hand: list[str]) -> int:
         """Implementing this function is our priority."""
+
+        if self.mode == "nigiri":
+            if GameState.has_unused_wasabi == True:
+                return self.highest_nigiri(hand)
+
+            if highest_nigiri := self.highest_nigiri(hand):
+                return highest_nigiri
+            
+
+
+
+            
+
+
+            
+
+
+        
+            
+
 
         # Fallback: random
         return random.randint(0, len(hand) - 1)
 
     #return index of highest value nigiri card, or -1
-    def highest_ngiricard(self, hand: list[str]) -> int:
+    def highest_nigiri(self, hand: list[str]) -> int:
         """Choose the highest value nigiri card."""
         best_index = -1
         best_value = -1
@@ -181,7 +280,7 @@ class SushiGoClient:
                 best_value = value
                 best_index = i
 
-        return best_index if best_index != -1 else self.choose_card(hand)
+        return best_index
 
     def handle_message(self, message: str):
         """Handle a message from the server."""
@@ -194,13 +293,20 @@ class SushiGoClient:
                 self.state.turn = 1
                 self.state.played_cards = []
         elif message.startswith("PLAYED"):
-            # Cards were revealed, next turn
+            # Cards were revealed, parse what other players played
+            self.parse_played(message)
             if self.state:
                 self.state.turn += 1
         elif message.startswith("ROUND_END"):
-            # Round ended
+            # Round ended - parse scores and clear played cards except pudding
             if self.state:
                 self.state.played_cards = []
+            # Parse scores from ROUND_END message
+            self.parse_round_end(message)
+            # Clear other players' cards except pudding (which persists)
+            for player in self.other_players_played:
+                pudding_count = self.other_players_played[player].count("Pudding")
+                self.other_players_played[player] = ["Pudding"] * pudding_count
         elif message.startswith("GAME_END"):
             print("Game over!")
             return False
