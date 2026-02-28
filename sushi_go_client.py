@@ -12,6 +12,7 @@ Example:
     python sushi_go_client.py localhost 7878 abc123 MyBot
 """
 
+import argparse
 import json
 import random
 import re
@@ -717,26 +718,29 @@ class SushiGoClient:
 
 
 def main():
-    if len(sys.argv) < 5:
-        print("Usage: python sushi_go_client.py <host> <port> <game_id> <player_name> [-t]")
-        print("       -t  Tournament mode (use TOURNEY instead of JOIN)")
-        print("Example: python sushi_go_client.py localhost 7878 abc123 MyBot")
-        print("         python sushi_go_client.py localhost 7878 tourney1 MyBot -t")
-        sys.exit(1)
-
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-    game_id = sys.argv[3]
-    player_name = sys.argv[4]
-    tournament_mode = "-t" in sys.argv or "--tournament" in sys.argv
-
-    client = SushiGoClient(host, port)
+    parser = argparse.ArgumentParser(
+        description="Sushi Go Client - Connect to a Sushi Go server and play",
+        usage="%(prog)s <host> <port> <game_id> <player_name> [-t]"
+    )
+    parser.add_argument("host", help="Server host (e.g., localhost or 10.8.1.191)")
+    parser.add_argument("port", type=int, help="Server port (e.g., 7878)")
+    parser.add_argument("game_id", help="Game ID to join")
+    parser.add_argument("player_name", help="Name of the player")
+    parser.add_argument(
+        "-t", "--tournament",
+        action="store_true",
+        help="Tournament mode (use TOURNEY instead of JOIN)"
+    )
     
-    if tournament_mode:
+    args = parser.parse_args()
+    
+    client = SushiGoClient(args.host, args.port)
+    
+    if args.tournament:
         print("Running in tournament mode...")
-        client.run_tournament(game_id, player_name)
+        client.run_tournament(args.game_id, args.player_name)
     else:
-        client.run(game_id, player_name)
+        client.run(args.game_id, args.player_name)
 
 
 if __name__ == "__main__":
