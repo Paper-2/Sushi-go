@@ -319,7 +319,9 @@ class SushiGoClient:
             # Clear other players' cards except pudding (which persists)
             for player in self.other_players_played:
                 pudding_count = self.other_players_played[player].get("Pudding", 0)
-                self.other_players_played[player] = {"Pudding": pudding_count} if pudding_count > 0 else {}
+                self.other_players_played[player] = (
+                    {"Pudding": pudding_count} if pudding_count > 0 else {}
+                )
         elif message.startswith("GAME_END"):
             print("Game over!")
             return False
@@ -334,18 +336,23 @@ class SushiGoClient:
             return
         self.calculate_weights()
 
-        
         # Check if we should use chopsticks
         use_chopsticks_value = self.cards_weights.get("Use chopsticks", -1)
-        if use_chopsticks_value > 1 and self.state.has_chopsticks and len(self.state.hand) >= 2:
+        if (
+            use_chopsticks_value > 1
+            and self.state.has_chopsticks
+            and len(self.state.hand) >= 2
+        ):
             # Find the top 2 cards by weight
-            card_values = [(i, card, self.cards_weights.get(card, 0)) for i, card in enumerate(self.state.hand)]
+            card_values = [
+                (i, card, self.cards_weights.get(card, 0))
+                for i, card in enumerate(self.state.hand)
+            ]
             card_values.sort(key=lambda x: x[2], reverse=True)
-            
+
             first_idx, first_card, _ = card_values[0]
             second_idx, second_card, _ = card_values[1]
-            
-            
+
             if first_idx != second_idx:
                 response = self.play_chopsticks(first_idx, second_idx)
                 if response.startswith("OK"):
@@ -353,8 +360,8 @@ class SushiGoClient:
                         self.state.played_cards.append(first_card)
                         self.state.played_cards.append(second_card)
                         self.state.has_chopsticks = False  # Used our chopsticks
-                return
-        
+                    return  # Only return if chopsticks succeeded
+
         card_index = self.choose_card(self.state.hand)
 
         # Track the card we're about to play
