@@ -110,6 +110,14 @@ class SushiGoClient:
         }
 
         self.other_players_scores: dict[str, int] = {}
+        
+        # Tournament state
+        self.tournament_id: Optional[str] = None
+        self.tournament_rejoin_token: Optional[str] = None
+        self.in_tournament: bool = False
+        self.current_match_token: Optional[str] = None
+        self.tournament_round: int = 0
+        self.opponent_name: Optional[str] = None
 
     def __post_init__(self):
         if self.played_cards is None:
@@ -177,6 +185,50 @@ class SushiGoClient:
         """Signal that we're ready to start."""
         self.send("READY")
         return self.receive()
+
+    def leave_game(self):
+        """Leave the current game so we can join the next match."""
+        self.send("LEAVE")
+        self.receive_until(
+            lambda line: line.startswith("OK") or line.startswith("ERROR")
+        )
+        self.state = None
+
+    def join_tournament(self, tournament_id: str, player_name: str) -> bool:
+        """Join a tournament."""
+        self.send(f"TOURNEY {tournament_id} {player_name}")
+        response = self.receive_until(
+            lambda line: line.startswith("TOURNAMENT_WELCOME") or line.startswith("ERROR")
+        )
+
+        if response.startswith("TOURNAMENT_WELCOME"):
+            # TOURNAMENT_WELCOME <tournament_id> <count>/<max> <rejoin_token>
+            parts = response.split()
+            self.tournament_id = parts[1]
+            self.tournament_rejoin_token = parts[3] if len(parts) > 3 else None
+            self.in_tournament = True
+            print(f"Joined tournament {self.tournament_id} ({parts[2]})")
+            return True
+        elif response.startswith("ERROR"):
+            print(f"Failed to join tournament: {response}")
+            return False
+        return False
+
+    def join_match(self, match_token: str) -> bool:
+        """Join a tournament match using TJOIN."""
+        self.send(f"TJOIN {match_token}")
+        response = self.receive_until(
+            lambda line: line.startswith("WELCOME") or line.startswith("ERROR")
+        )
+
+        if response.startswith("WELCOME"):
+            parts = response.split()
+            self.state = GameState(game_id=parts[1], player_id=int(parts[2]), hand=[])
+            return True
+        elif response.startswith("ERROR"):
+            print(f"Failed to join match: {response}")
+            return False
+        return False
 
     def play_card(self, card_index: int):
         """Play a card by index."""
@@ -326,10 +378,36 @@ class SushiGoClient:
                 )
         elif message.startswith("GAME_END"):
             print("Game over!")
-            return False
+            if not self.in_tournament:
+                return False
+            # In tournament mode, game end means match is over, wait for next match
+            return True
         elif message.startswith("WAITING"):
             # Our move was accepted, waiting for others
             pass
+        # Tournament-specific messages
+        elif message.startswith("TOURNAMENT_JOINED"):
+            # TOURNAMENT_JOINED <tournament_id> <player_name> <count>/<max>
+            parts = message.split()
+            print(f"Player {parts[2]} joined tournament ({parts[3]})")
+        elif message.startswith("TOURNAMENT_MATCH"):
+            # TOURNAMENT_MATCH <tournament_id> <match_token|BYE> <round> [opponent_name]
+            parts = message.split()
+            self.tournament_round = int(parts[3])
+            if parts[2] == "BYE":
+                print(f"Round {self.tournament_round}: Received BYE (auto-advance)")
+                self.current_match_token = None
+            else:
+                self.current_match_token = parts[2]
+                self.opponent_name = parts[4] if len(parts) > 4 else "Unknown"
+                print(f"Round {self.tournament_round}: Match vs {self.opponent_name}")
+        elif message.startswith("TOURNAMENT_COMPLETE"):
+            # TOURNAMENT_COMPLETE <tournament_id> <winner_name>
+            parts = message.split()
+            winner = parts[2] if len(parts) > 2 else "Unknown"
+            print(f"Tournament complete! Winner: {winner}")
+            self.in_tournament = False
+            return False
         return True
 
     def play_turn(self):
@@ -398,6 +476,93 @@ class SushiGoClient:
                 # If we received our hand, play a card
                 if message.startswith("HAND") and self.state and self.state.hand:
                     self.play_turn()
+
+        except KeyboardInterrupt:
+            print("\nDisconnecting...")
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            self.disconnect()
+
+    def play_game(self) -> Optional[str]:
+        """Play a full game. Returns a tournament message if one arrived during the game, else None."""
+        while True:
+            message = self.receive()
+
+            # Tournament messages can arrive during a game
+            if message.startswith("TOURNAMENT_MATCH") or message.startswith("TOURNAMENT_COMPLETE"):
+                return message
+
+            game_running = self.handle_message(message)
+
+            if message.startswith("HAND") and self.state and self.state.hand:
+                self.play_turn()
+
+            if not game_running:
+                return None
+
+    def run_tournament(self, tournament_id: str, player_name: str):
+        """Main tournament loop."""
+        try:
+            self.connect()
+
+            if not self.join_tournament(tournament_id, player_name):
+                return
+
+            print("Waiting for tournament to start...")
+
+            pending_message = None
+
+            # Tournament loop - wait for match assignments
+            while True:
+                if pending_message:
+                    msg = pending_message
+                    pending_message = None
+                else:
+                    msg = self.receive()
+
+                if not msg:
+                    continue
+
+                if msg.startswith("TOURNAMENT_MATCH"):
+                    # TOURNAMENT_MATCH <tid> <match_token> <round> [<opponent>]
+                    parts = msg.split()
+                    match_token = parts[2]
+                    round_num = parts[3]
+                    opponent = parts[4] if len(parts) > 4 else "unknown"
+
+                    if match_token == "BYE" or opponent == "BYE":
+                        print(f"Round {round_num}: got a BYE, auto-advancing...")
+                        continue
+
+                    print(f"Round {round_num}: matched vs {opponent}")
+
+                    if not self.join_match(match_token):
+                        continue
+
+                    self.signal_ready()
+
+                    # Reset game state for new match
+                    self.other_players_played = {}
+                    self.other_players_scores = {}
+
+                    # Play the game - may return a tournament message that arrived mid-game
+                    pending_message = self.play_game()
+
+                    # Leave the game so we can join the next match
+                    self.leave_game()
+
+                elif msg.startswith("TOURNAMENT_COMPLETE"):
+                    # TOURNAMENT_COMPLETE <tid> <winner>
+                    parts = msg.split()
+                    winner = parts[2] if len(parts) > 2 else "unknown"
+                    print(f"Tournament complete! Winner: {winner}")
+                    break
+
+                elif msg.startswith("TOURNAMENT_JOINED"):
+                    print(f"  {msg}")
+
+                # Ignore other messages
 
         except KeyboardInterrupt:
             print("\nDisconnecting...")
@@ -552,18 +717,26 @@ class SushiGoClient:
 
 
 def main():
-    if len(sys.argv) != 5:
-        print("Usage: python sushi_go_client.py <host> <port> <game_id> <player_name>")
+    if len(sys.argv) < 5:
+        print("Usage: python sushi_go_client.py <host> <port> <game_id> <player_name> [-t]")
+        print("       -t  Tournament mode (use TOURNEY instead of JOIN)")
         print("Example: python sushi_go_client.py localhost 7878 abc123 MyBot")
+        print("         python sushi_go_client.py localhost 7878 tourney1 MyBot -t")
         sys.exit(1)
 
     host = sys.argv[1]
     port = int(sys.argv[2])
     game_id = sys.argv[3]
     player_name = sys.argv[4]
+    tournament_mode = "-t" in sys.argv or "--tournament" in sys.argv
 
     client = SushiGoClient(host, port)
-    client.run(game_id, player_name)
+    
+    if tournament_mode:
+        print("Running in tournament mode...")
+        client.run_tournament(game_id, player_name)
+    else:
+        client.run(game_id, player_name)
 
 
 if __name__ == "__main__":
