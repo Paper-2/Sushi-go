@@ -409,28 +409,52 @@ class SushiGoClient:
 
         hand = self.state.hand
         played = self.state.played_cards
-
-        # Base nigiri values (with wasabi multiplier if applicable)
+        hand_size = len(hand)
+        current_round = self.state.round
+        turn = self.state.turn
+        
+        # === WASABI === (PPC 4.5 with squid, 3 with salmon)
+        # ALWAYS first pick - best value in game when paired with squid (9 pts)
+        # Early turns: very high value. After turn 3: drops quickly (might only catch egg)
+        if not self.state.has_unused_wasabi:
+            if turn <= 2:
+                self.cards_weights["Wasabi"] = 8  # Excellent chance to hit squid/salmon
+            elif turn <= 4:
+                self.cards_weights["Wasabi"] = 5  # Still good odds
+            else:
+                self.cards_weights["Wasabi"] = 2  # Likely to only hit egg or nothing
+        else:
+            self.cards_weights["Wasabi"] = 0.5  # Already have one, don't stack
+        
+        # === NIGIRI === (Egg=1, Salmon=2, Squid=3; with wasabi: 3/6/9)
         wasabi_mult = 3 if self.state.has_unused_wasabi else 1
         self.cards_weights["Egg Nigiri"] = 1 * wasabi_mult
         self.cards_weights["Salmon Nigiri"] = 2 * wasabi_mult
         self.cards_weights["Squid Nigiri"] = 3 * wasabi_mult
 
-        # Wasabi is valuable if we don't have one unused AND there's nigiri in hand
-        has_nigiri_in_hand = any(
-            c in ("Egg Nigiri", "Salmon Nigiri", "Squid Nigiri") for c in hand
-        )
-        self.cards_weights["Wasabi"] = (
-            4 if (not self.state.has_unused_wasabi and has_nigiri_in_hand) else 1
-        )
-
-        # Tempura: 5 points per pair
+        if not self.state.has_chopsticks:
+            if turn == 1:
+                self.cards_weights["Chopsticks"] = 7  #  high combo potential
+            elif turn == 2:
+                self.cards_weights["Chopsticks"] = 5  #  good
+            elif turn <= 4 and hand_size >= 4:
+                self.cards_weights["Chopsticks"] = 3  # Moderate value
+            else:
+                self.cards_weights["Chopsticks"] = 0.5  # Too late, won't get value
+        else:
+            self.cards_weights["Chopsticks"] = 0  # Already have one
+        
+        # === TEMPURA === (PPC 2.5)
+        # Decent consistency, easier to complete than sashimi
         tempura_count = played.count("Tempura")
-        self.cards_weights["Tempura"] = (
-            5 if tempura_count % 2 == 1 else 2.5
-        )  # Higher if we need 1 more for pair
-
-        # Sashimi: 10 points per triplet
+        if tempura_count % 2 == 1:
+            self.cards_weights["Tempura"] = 5  # Complete the pair!
+        else:
+            self.cards_weights["Tempura"] = 2.5  # Starting fresh
+        
+        # === SASHIMI === (PPC 3.33 but IT'S A TRAP!)
+        # Only ~13% chance (14/108) per card. Easy to block, often doesn't exist in pool.
+        # Avoid unless we already have 2 (then we MUST complete it)
         sashimi_count = played.count("Sashimi")
         if sashimi_count % 3 == 2:
             self.cards_weights["Sashimi"] = 10  # One more completes the set!
