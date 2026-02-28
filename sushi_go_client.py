@@ -45,7 +45,7 @@ class GameState:
     hand: list[str]
     round: int = 1
     turn: int = 1
-    played_cards: list[str] = None
+    played_cards: list[str] = None # type: ignore
     has_chopsticks: bool = False
     has_unused_wasabi: bool = False
     puddings: int = 0
@@ -81,7 +81,7 @@ class SushiGoClient:
     def send(self, command: str):
         """Send a command to the server."""
         message = command + "\n"
-        self.sock.sendall(message.encode("utf-8"))
+        self.sock.sendall(message.encode("utf-8")) # type: ignore
         print(f">>> {command}")
 
     def receive(self) -> str:
@@ -93,7 +93,7 @@ class SushiGoClient:
                 print(f"<<< {message}")
                 return message
 
-            chunk = self.sock.recv(4096)
+            chunk = self.sock.recv(4096) # type: ignore
             if not chunk:
                 raise ConnectionError("Server closed connection")
             self._recv_buffer += chunk.decode("utf-8", errors="replace")
@@ -157,44 +157,7 @@ class SushiGoClient:
                 )
 
     def choose_card(self, hand: list[str]) -> int:
-        """
-        Choose which card to play.
-
-        This is where you implement your AI strategy!
-        The default implementation uses a simple priority-based approach.
-
-        Args:
-            hand: List of card codes in your current hand
-
-        Returns:
-            Index of the card to play (0-based)
-        """
-        # Simple priority-based strategy
-        priority = [
-            "Squid Nigiri",  # 3 points, or 9 with wasabi
-            "Salmon Nigiri",  # 2 points, or 6 with wasabi
-            "Maki Roll (3)",  # 3 maki rolls
-            "Maki Roll (2)",  # 2 maki rolls
-            "Tempura",  # 5 points per pair
-            "Sashimi",  # 10 points per set of 3
-            "Dumpling",  # Increasing value
-            "Wasabi",  # Triples next nigiri
-            "Egg Nigiri",  # 1 point, or 3 with wasabi
-            "Pudding",  # End game scoring
-            "Maki Roll (1)",  # 1 maki roll
-            "Chopsticks",  # Play 2 cards next turn
-        ]
-
-        # If we have wasabi, prioritize nigiri
-        if self.state and self.state.has_unused_wasabi:
-            for nigiri in ["Squid Nigiri", "Salmon Nigiri", "Egg Nigiri"]:
-                if nigiri in hand:
-                    return hand.index(nigiri)
-
-        # Otherwise use priority list
-        for card in priority:
-            if card in hand:
-                return hand.index(card)
+        """Implementing this function is our priority."""
 
         # Fallback: random
         return random.randint(0, len(hand) - 1)
