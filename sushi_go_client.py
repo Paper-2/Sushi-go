@@ -72,7 +72,7 @@ class SushiGoClient:
         self.other_players_played: dict[str, list[str]] = {}
 
 
-        self.cards_weights = {
+        self.cards_weights: dict[str, float] = {
             "Tempura": 0,
             "Sashimi": 0,
             "Dumpling": 0,
@@ -85,6 +85,7 @@ class SushiGoClient:
             "Pudding": 0,
             "Wasabi": 0,
             "Chopsticks": 0,
+            "Use chopsticks": 0,
         }
 
         self.other_players_scores: dict[str, int] = {}
@@ -236,30 +237,21 @@ class SushiGoClient:
                 pass  # Silently ignore parsing errors
 
     def choose_card(self, hand: list[str]) -> int:
-        """Implementing this function is our priority."""
-
-        if self.mode == "nigiri":
-            if GameState.has_unused_wasabi == True:
-                return self.highest_nigiri(hand)
-
-            if highest_nigiri := self.highest_nigiri(hand):
-                return highest_nigiri
+        """Choose the best card to play based on calculated weights."""
+        if not hand:
+            return 0
             
-
-
-
-            
-
-
-            
-
-
+        # Find the card with highest weight
+        best_index = 0
+        best_weight = -float('inf')
         
-            
-
-
-        # Fallback: random
-        return random.randint(0, len(hand) - 1)
+        for i, card in enumerate(hand):
+            weight = self.cards_weights.get(card, 0)
+            if weight > best_weight:
+                best_weight = weight
+                best_index = i
+        
+        return best_index
 
     #return index of highest value nigiri card, or -1
     def highest_nigiri(self, hand: list[str]) -> int:
@@ -319,7 +311,28 @@ class SushiGoClient:
         """Play a single turn."""
         if not self.state or not self.state.hand:
             return
+        self.calculate_weights()
 
+        # Check if we should use chopsticks
+        use_chopsticks_value = self.cards_weights.get("Use chopsticks", 0)
+        if use_chopsticks_value > 0 and self.state.has_chopsticks and len(self.state.hand) >= 2:
+            # Find the top 2 cards by weight
+            card_values = [(i, card, self.cards_weights.get(card, 0)) for i, card in enumerate(self.state.hand)]
+            card_values.sort(key=lambda x: x[2], reverse=True)
+            
+            first_idx, first_card, _ = card_values[0]
+            second_idx, second_card, _ = card_values[1]
+            
+            # Ensure indices are different
+            if first_idx != second_idx:
+                response = self.play_chopsticks(first_idx, second_idx)
+                if response.startswith("OK"):
+                    if self.state:
+                        self.state.played_cards.append(first_card)
+                        self.state.played_cards.append(second_card)
+                        self.state.has_chopsticks = False  # Used our chopsticks
+                return
+            
         card_index = self.choose_card(self.state.hand)
 
         # Track the card we're about to play
@@ -359,6 +372,68 @@ class SushiGoClient:
             print(f"Error: {e}")
         finally:
             self.disconnect()
+
+    def calculate_weights(self):
+        """Calculate the weight/value of each card based on current game state."""
+        if not self.state:
+            return
+            
+        hand = self.state.hand
+        played = self.state.played_cards
+        
+        # Base nigiri values (with wasabi multiplier if applicable)
+        wasabi_mult = 3 if self.state.has_unused_wasabi else 1
+        self.cards_weights["Egg Nigiri"] = 1 * wasabi_mult
+        self.cards_weights["Salmon Nigiri"] = 2 * wasabi_mult
+        self.cards_weights["Squid Nigiri"] = 3 * wasabi_mult
+        
+        # Wasabi is valuable if we don't have one unused AND there's nigiri in hand
+        has_nigiri_in_hand = any(c in ("Egg Nigiri", "Salmon Nigiri", "Squid Nigiri") for c in hand)
+        self.cards_weights["Wasabi"] = 4 if (not self.state.has_unused_wasabi and has_nigiri_in_hand) else 1
+        
+        # Tempura: 5 points per pair
+        tempura_count = played.count("Tempura")
+        self.cards_weights["Tempura"] = 5 if tempura_count % 2 == 1 else 2.5  # Higher if we need 1 more for pair
+        
+        # Sashimi: 10 points per triplet
+        sashimi_count = played.count("Sashimi")
+        if sashimi_count % 3 == 2:
+            self.cards_weights["Sashimi"] = 10  # One more completes the set!
+        elif sashimi_count % 3 == 1:
+            self.cards_weights["Sashimi"] = 5   # Two more needed
+        else:
+            self.cards_weights["Sashimi"] = 3   # Starting fresh
+        
+        # Dumplings: 1, 3, 6, 10, 15 points for 1-5+ dumplings
+        dumpling_count = played.count("Dumpling")
+        dumpling_values = [1, 2, 3, 4, 5]  # Marginal value of next dumpling
+        self.cards_weights["Dumpling"] = dumpling_values[min(dumpling_count, 4)]
+        
+        # Maki rolls: value depends on competition (simplified: just count symbols)
+        self.cards_weights["Maki Roll (1)"] = 1
+        self.cards_weights["Maki Roll (2)"] = 2
+        self.cards_weights["Maki Roll (3)"] = 3
+        
+        # Pudding: long-term value (avoid last place, go for first)
+        self.cards_weights["Pudding"] = 2  # Moderate value, helps end-game
+        
+        # Chopsticks: valuable early when hand is large
+        hand_size = len(hand)
+        self.cards_weights["Chopsticks"] = 2 if (hand_size >= 5 and not self.state.has_chopsticks) else 0.5
+        
+        # Calculate value of USING chopsticks (need 2+ cards in hand, must have chopsticks played)
+        self.cards_weights["Use chopsticks"] = 0
+        if self.state.has_chopsticks and len(hand) >= 2:
+            # Find values of top 2 cards
+            card_values = [(i, self.cards_weights.get(card, 0)) for i, card in enumerate(hand)]
+            card_values.sort(key=lambda x: x[1], reverse=True)
+            
+            if len(card_values) >= 2:
+                top_two_value = card_values[0][1] + card_values[1][1]
+                best_single = card_values[0][1]
+                # Use chopsticks if combined value of top 2 > best single + value of keeping chopsticks
+                if top_two_value > best_single + 1:
+                    self.cards_weights["Use chopsticks"] = top_two_value
 
 
 def main():
