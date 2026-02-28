@@ -402,9 +402,9 @@ class SushiGoClient:
         if sashimi_count % 3 == 2:
             self.cards_weights["Sashimi"] = 10  # One more completes the set!
         elif sashimi_count % 3 == 1:
-            self.cards_weights["Sashimi"] = 5   # Two more needed
+            self.cards_weights["Sashimi"] = 2   # Two more needed
         else:
-            self.cards_weights["Sashimi"] = 3   # Starting fresh
+            self.cards_weights["Sashimi"] = 1   # Starting fresh
         
         # Dumplings: 1, 3, 6, 10, 15 points for 1-5+ dumplings
         dumpling_count = played.count("Dumpling")
