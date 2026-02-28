@@ -162,6 +162,27 @@ class SushiGoClient:
         # Fallback: random
         return random.randint(0, len(hand) - 1)
 
+    #return index of highest value nigiri card, or -1
+    def highest_ngiricard(self, hand: list[str]) -> int:
+        """Choose the highest value nigiri card."""
+        best_index = -1
+        best_value = -1
+        for i, card in enumerate(hand):
+            if card == "Egg Nigiri":
+                value = 1
+            elif card == "Salmon Nigiri":
+                value = 2
+            elif card == "Squid Nigiri":
+                value = 3
+            else:
+                continue
+
+            if value > best_value:
+                best_value = value
+                best_index = i
+
+        return best_index if best_index != -1 else self.choose_card(hand)
+
     def handle_message(self, message: str):
         """Handle a message from the server."""
         if message.startswith("HAND"):
